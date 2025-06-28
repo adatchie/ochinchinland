@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D関ヶ原の戦いシミュレーション</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="main-container">
+        <div id="scene-container">
+            <canvas id="scene-canvas"></canvas>
+            <div id="labels-container"></div>
+        </div>
+        <div id="controls-panel">
+            <h1>関ヶ原の戦い (3D)</h1>
+            <div id="controls">
+                <button id="reset-button">リセット</button>
+                <button id="backward-button">戻る</button>
+                <button id="forward-button">進む</button>
+                <button id="play-pause-button">再生</button>
+            </div>
+            <div id="timeline-info">
+                <div>時刻: <span id="current-time">開戦前</span></div>
+                <div>状況: <span id="event-description">待機中</span></div>
+            </div>
+        </div>
+    </div>
+    <!-- 1. Three.js本体を読み込む -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- 2. OrbitControlsアドオンを読み込む -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- 3. Tween.jsライブラリを読み込む -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <!-- 4. 最後に自分のスクリプトを読み込む -->
+    <script src="game.js"></script>
+</body>
+</html>

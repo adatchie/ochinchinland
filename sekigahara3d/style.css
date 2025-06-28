@@ -1,0 +1,103 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    font-family: sans-serif;
+    background-color: #f0f0f0;
+    overflow: hidden; /* スクロールバーをなくす */
+}
+
+#main-container {
+    display: flex;
+    width: 100%;
+    height: 100%;
+}
+
+#scene-container {
+    flex-grow: 1;
+    position: relative; /* ラベル配置の基準 */
+    height: 100%;
+}
+
+#scene-canvas {
+    display: block; /* canvas特有の余白を消す */
+    width: 100%;
+    height: 100%;
+}
+
+#labels-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none; /* 3Dシーンの操作を妨げない */
+    overflow: hidden;
+}
+
+.unit-label {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translateX(-50%) translateY(-100%); /* 中央揃え */
+    color: white;
+    text-shadow: 1px 1px 3px black;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.unit-label .name {
+    font-weight: bold;
+}
+
+.unit-label .soldiers {
+    font-size: 11px;
+}
+
+#controls-panel {
+    width: 280px;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+h1 {
+    font-size: 24px;
+    text-align: center;
+}
+
+#controls {
+    display: flex;
+    justify-content: space-between;
+}
+
+#controls button {
+    padding: 10px;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    flex-grow: 1;
+    margin: 0 5px;
+}
+
+#controls button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+#timeline-info {
+    font-size: 14px;
+    line-height: 1.6;
+}
