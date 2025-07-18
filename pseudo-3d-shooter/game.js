@@ -276,8 +276,8 @@ canvas.addEventListener('touchmove', (e) => {
     if (isDragging) {
         const dx = e.touches[0].clientX - lastMousePosition.x;
         const dy = e.touches[0].clientY - lastMousePosition.y;
-        view.x -= dx * 3;
-        view.y -= dy * 3;
+        view.x -= dx * 5;
+        view.y -= dy * 5;
         lastMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         e.preventDefault(); // Prevent scrolling
     }
