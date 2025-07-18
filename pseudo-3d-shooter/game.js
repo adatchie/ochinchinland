@@ -262,6 +262,27 @@ canvas.addEventListener('mousemove', (e) => {
     }
 });
 
+canvas.addEventListener('touchstart', (e) => {
+    isDragging = true;
+    lastMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    e.preventDefault(); // Prevent scrolling
+});
+
+canvas.addEventListener('touchend', () => {
+    isDragging = false;
+});
+
+canvas.addEventListener('touchmove', (e) => {
+    if (isDragging) {
+        const dx = e.touches[0].clientX - lastMousePosition.x;
+        const dy = e.touches[0].clientY - lastMousePosition.y;
+        view.x -= dx * 2;
+        view.y -= dy * 2;
+        lastMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        e.preventDefault(); // Prevent scrolling
+    }
+});
+
 canvas.addEventListener('click', () => {
     if (gameOver) return;
     // Create a beam that travels towards the center of the screen
@@ -271,6 +292,8 @@ canvas.addEventListener('click', () => {
         beams.shift();
     }
 });
+
+
 
 window.addEventListener('resize', () => {
     canvas.width = window.innerWidth;
