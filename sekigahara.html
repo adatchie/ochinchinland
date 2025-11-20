@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Sekigahara RTS Style</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+            color: white;
+            user-select: none;
+        }
+        /* UI Layout */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .hud-panel {
+            position: absolute; background: rgba(0, 0, 0, 0.85);
+            border: 2px solid #aaa; padding: 10px; border-radius: 4px; pointer-events: auto;
+        }
+        
+        /* Top Bar */
+        #top-bar {
+            top: 10px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 20px; font-size: 16px; font-weight: bold; white-space: nowrap;
+        }
+        
+        /* Action Button */
+        #action-btn {
+            position: absolute; bottom: 20px; right: 20px;
+            font-size: 20px; padding: 15px 40px;
+            background: #b22222; color: white; border: 2px solid #ff6347;
+            cursor: pointer; pointer-events: auto; font-weight: bold;
+            box-shadow: 0 4px 0 #500; transition: 0.1s;
+        }
+        #action-btn:active { transform: translateY(4px); box-shadow: 0 0 0 #500; }
+
+        /* Context Menu */
+        #context-menu {
+            position: absolute; display: none; flex-direction: column; gap: 2px;
+            background: #eee; padding: 4px; border-radius: 2px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.5); pointer-events: auto; z-index: 100;
+        }
+        .ctx-btn {
+            padding: 8px 20px; font-size: 14px; cursor: pointer;
+            border: 1px solid #999; background: #fff; color: #000; font-weight: bold;
+        }
+        .ctx-btn:hover { background: #ddd; }
+
+        /* Unit Info */
+        #unit-list {
+            position: absolute; top: 60px; left: 20px;
+            width: 220px; max-height: 400px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 5px;
+            pointer-events: none;
+        }
+        .unit-card {
+            background: rgba(0,0,0,0.7); border-left: 5px solid #555;
+            padding: 5px; font-size: 12px; color: #ddd;
+        }
+        .card-east { border-color: #1E90FF; }
+        .card-west { border-color: #DC143C; }
+
+        /* Controls Hint */
+        #controls-hint {
+            position: absolute; bottom: 20px; left: 20px;
+            font-size: 12px; color: #aaa; background: rgba(0,0,0,0.5); padding: 5px;
+        }
+
+        /* Start Screen */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 200; pointer-events: auto;
+        }
+        .army-btn {
+            margin: 10px; padding: 20px 60px; font-size: 24px; cursor: pointer;
+            border: 2px solid #fff; color: white; font-family: serif;
+        }
+        #btn-east { background: #003366; }
+        #btn-west { background: #660000; }
+
+    </style>
+</head>
+<body oncontextmenu="return false;"> <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="ui-layer">
+        <div id="top-bar" class="hud-panel">
+            <span id="phase-text" style="color:#ffd700">目標設定</span>
+            <span id="status-text">東軍: -- / 西軍: --</span>
+        </div>
+
+        <div id="unit-list">
+            </div>
+
+        <button id="action-btn" onclick="commitTurn()">行動開始</button>
+        
+        <div id="controls-hint">
+            [左ドラッグ] 範囲選択　[右ドラッグ] カメラ移動<br>
+            [左クリック] 移動指示 / 敵選択
+        </div>
+
+        <div id="context-menu">
+            <button class="ctx-btn" style="color:darkred" onclick="issueCommand('ATTACK')">攻撃</button>
+            <button class="ctx-btn" style="color:darkgreen" onclick="issueCommand('PLOT')">調略</button>
+            <button class="ctx-btn" onclick="closeCtx()">キャンセル</button>
+        </div>
+    </div>
+
+    <div id="start-screen">
+        <h1 style="color:#d4af37; font-size:40px; margin-bottom:30px;">関ヶ原の戦い -RTS Mode-</h1>
+        <div onclick="startGame('EAST')" id="btn-east" class="army-btn">東軍 (徳川)</div>
+        <div onclick="startGame('WEST')" id="btn-west" class="army-btn">西軍 (石田)</div>
+    </div>
+</div>
+
+<script>
+/**
+ * SEKIGAHARA RTS ENGINE
+ */
+
+// --- Config ---
+const HEX_SIZE = 24; // 2D TopDown size
+const MAP_W = 40;
+const MAP_H = 40;
+
+// Colors
+const C_EAST = '#1E90FF';
+const C_WEST = '#DC143C';
+const C_SEL_BOX = 'rgba(0, 255, 0, 0.3)';
+const C_SEL_BORDER = '#0f0';
+
+// --- State ---
+let canvas, ctx;
+let camera = { x: 0, y: 0, zoom: 1.0 };
+let input = { 
+    isLeftDown: false, isRightDown: false,
+    start: {x:0, y:0}, curr: {x:0, y:0} // Screen coords for drag
+};
+let gameState = 'INIT';
+let playerSide = 'EAST';
+let map = [];
+let units = [];
+let selectedUnits = []; // Array for multi-select
+let targetContextUnit = null; // Enemy clicked for menu
+
+// Data
+const WARLORDS = [
+    { name: "徳川家康", side: 'EAST', soldiers: 30000, atk: 95, def: 98, jin: 95, loyalty: 100, q: 35, r: 35 },
+    { name: "福島正則", side: 'EAST', soldiers: 6000, atk: 90, def: 70, jin: 60, loyalty: 90, q: 20, r: 25 },
+    { name: "黒田長政", side: 'EAST', soldiers: 5400, atk: 85, def: 80, jin: 80, loyalty: 95, q: 22, r: 23 },
+    { name: "井伊直政", side: 'EAST', soldiers: 3600, atk: 92, def: 60, jin: 50, loyalty: 100, q: 19, r: 26 },
+    { name: "本多忠勝", side: 'EAST', soldiers: 500, atk: 99, def: 95, jin: 85, loyalty: 100, q: 34, r: 36 },
+    { name: "細川忠興", side: 'EAST', soldiers: 5000, atk: 75, def: 75, jin: 70, loyalty: 85, q: 25, r: 22 },
+
+    { name: "石田三成", side: 'WEST', soldiers: 6000, atk: 70, def: 85, jin: 90, loyalty: 100, q: 5, r: 5 },
+    { name: "島左近",   side: 'WEST', soldiers: 1000, atk: 96, def: 90, jin: 80, loyalty: 100, q: 6, r: 6 },
+    { name: "宇喜多秀家", side: 'WEST', soldiers: 17000, atk: 85, def: 80, jin: 75, loyalty: 95, q: 8, r: 8 },
+    { name: "小西行長", side: 'WEST', soldiers: 4000, atk: 70, def: 75, jin: 80, loyalty: 90, q: 7, r: 10 },
+    { name: "大谷吉継", side: 'WEST', soldiers: 2000, atk: 80, def: 90, jin: 95, loyalty: 100, q: 10, r: 20 },
+    { name: "島津義弘", side: 'WEST', soldiers: 1500, atk: 98, def: 95, jin: 60, loyalty: 80, q: 8, r: 15 },
+    
+    { name: "小早川秀秋", side: 'WEST', soldiers: 15000, atk: 60, def: 60, jin: 40, loyalty: 20, q: 15, r: 30 },
+    { name: "吉川広家", side: 'WEST', soldiers: 3000, atk: 70, def: 70, jin: 60, loyalty: 30, q: 35, r: 5 },
+    { name: "毛利秀元", side: 'WEST', soldiers: 16000, atk: 75, def: 75, jin: 50, loyalty: 40, q: 34, r: 6 }
+];
+
+// --- Init ---
+window.onload = function() {
+    canvas = document.getElementById('gameCanvas');
+    ctx = canvas.getContext('2d');
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // Mouse Events
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('wheel', onWheel);
+    
+    requestAnimationFrame(loop);
+};
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+
+function startGame(side) {
+    playerSide = side;
+    document.getElementById('start-screen').style.display = 'none';
+    
+    // Generate Map
+    map = [];
+    for(let r=0; r<MAP_H; r++) {
+        let row = [];
+        for(let q=0; q<MAP_W; q++) {
+            // Terrain Gen
+            let h = 0;
+            // Simple Mountain ranges
+            let d1 = Math.hypot(q-15, r-30); // Matsuo
+            let d2 = Math.hypot(q-35, r-5); // Nangu
+            if(d1 < 6) h = 4 + Math.random()*4;
+            else if(d2 < 7) h = 4 + Math.random()*4;
+            else if(q < 8 && r < 15) h = 6 + Math.random()*4;
+            
+            let type = 'PLAIN';
+            if(h > 3) type = 'MTN';
+            if(Math.abs(q-r) < 2 && h < 3) { type = 'RIVER'; h = -1; }
+
+            row.push({q, r, h, type});
+        }
+        map.push(row);
+    }
+
+    // Units
+    units = WARLORDS.map((w,i) => ({
+        id: i, ...w, maxSoldiers: w.soldiers,
+        dir: w.side==='EAST'?3:0, order: null, dead: false,
+        pos: hexToPixel(w.q, w.r) // Store pixel pos for smooth move later
+    }));
+
+    // Camera Center
+    let center = hexToPixel(20, 20);
+    camera.x = canvas.width/2 - center.x;
+    camera.y = canvas.height/2 - center.y;
+
+    gameState = 'ORDER';
+    updateHUD();
+}
+
+// --- Logic ---
+
+function commitTurn() {
+    if(gameState !== 'ORDER') return;
+
+    // CPU Orders (Simple)
+    units.filter(u => u.side !== playerSide && !u.dead).forEach(cpu => {
+        // Only order if idle or target dead
+        let updateNeeded = false;
+        if(!cpu.order) updateNeeded = true;
+        else if(cpu.order.type === 'ATTACK') {
+            let t = units.find(x=>x.id === cpu.order.targetId);
+            if(!t || t.dead) updateNeeded = true;
+        }
+
+        if(updateNeeded) {
+            let enemies = units.filter(t => t.side !== cpu.side && !t.dead);
+            if(enemies.length > 0) {
+                // Find closest
+                enemies.sort((a,b) => getDist(cpu, a) - getDist(cpu, b));
+                cpu.order = { type: 'ATTACK', targetId: enemies[0].id };
+            }
+        }
+    });
+
+    gameState = 'ACTION';
+    document.getElementById('action-btn').style.display = 'none';
+    document.getElementById('phase-text').innerText = "行動フェイズ (自動進行)";
+    closeCtx();
+
+    resolveTurn();
+}
+
+async function resolveTurn() {
+    // Sort units by soldier count (Ascending)
+    let queue = [...units].sort((a,b) => a.soldiers - b.soldiers);
+
+    for(let u of queue) {
+        if(u.dead) continue;
+        await processUnit(u);
+        
+        // Check End
+        let ieyasu = units.find(x=>x.name==='徳川家康');
+        let mitsunari = units.find(x=>x.name==='石田三成');
+        if(!ieyasu || ieyasu.dead) { alert('西軍勝利'); location.reload(); return; }
+        if(!mitsunari || mitsunari.dead) { alert('東軍勝利'); location.reload(); return; }
+    }
+
+    // End Phase
+    gameState = 'ORDER';
+    document.getElementById('action-btn').style.display = 'block';
+    document.getElementById('phase-text').innerText = "目標設定フェイズ";
+    updateHUD();
+}
+
+async function processUnit(u) {
+    if(!u.order) return;
+    
+    let target = null;
+    let dest = null;
+
+    // Plot Logic
+    if(u.order.type === 'PLOT') {
+        target = units.find(x=>x.id === u.order.targetId);
+        if(target && !target.dead) {
+            if(getDist(u, target) <= 4) {
+                // Execute Plot
+                let chance = 30 + (u.jin - target.loyalty);
+                if(target.loyalty > 95) chance = 1; // Loyalists safe
+                if(Math.random()*100 < chance) {
+                    target.side = u.side;
+                    target.loyalty = 100;
+                    target.order = null; // Reset their order
+                    alert(`${target.name}が寝返りました！`);
+                }
+                u.order = null; // Plot one-time use
+                await wait(200);
+                return;
+            } else {
+                // Move closer
+                dest = {q: target.q, r: target.r};
+            }
+        } else { u.order = null; return; }
+    }
+    
+    // Attack Logic
+    else if(u.order.type === 'ATTACK') {
+        target = units.find(x=>x.id === u.order.targetId);
+        if(target && !target.dead) {
+            if(getDist(u, target) <= 1) {
+                // Combat
+                await combat(u, target);
+                return; 
+            } else {
+                dest = {q: target.q, r: target.r};
+            }
+        } else {
+            u.order = null; // Target dead
+            return;
+        }
+    }
+
+    // Move Logic
+    else if(u.order.type === 'MOVE') {
+        dest = u.order.targetHex;
+        if(getDistRaw(u.q, u.r, dest.q, dest.r) === 0) {
+            u.order = null; // Arrived
+            return;
+        }
+    }
+
+    // Execute Move
+    if(dest) {
+        // Simple straight path
+        let path = getLine(u.q, u.r, dest.q, dest.r);
+        let moves = 3; // Speed
+        
+        for(let i=1; i<path.length && moves>0; i++) {
+            let next = path[i];
+            // Check occupancy
+            let occ = units.find(x=>x.q===next.q && x.r===next.r && !x.dead && x.id!==u.id);
+            if(occ) {
+                // If attacking and blocked by target, stop to fight next turn
+                if(target && occ.id === target.id) break; 
+                // Else blocked
+                break;
+            }
+            
+            u.q = next.q;
+            u.r = next.r;
+            u.pos = hexToPixel(u.q, u.r); // Update visual pos
+            moves--;
+            await wait(30); // Smooth step
+        }
+    }
+}
+
+async function combat(att, def) {
+    // Calc Dmg
+    // Height bonus
+    let hAtt = map[att.r][att.q].h;
+    let hDef = map[def.r][def.q].h;
+    
+    let mod = 1.0;
+    if(hAtt > hDef) mod += 0.2;
+    
+    // Flanking (Basic)
+    let friends = units.filter(x=>x.side===att.side && !x.dead && getDist(x, def)<=1);
+    if(friends.length > 1) mod += 0.2;
+
+    let dmg = Math.floor((Math.sqrt(att.soldiers) * att.atk * mod) / (def.def/20));
+    if(dmg < 10) dmg = 10;
+
+    def.soldiers -= dmg;
+    if(def.soldiers <= 0) {
+        def.soldiers = 0;
+        def.dead = true;
+    }
+    await wait(100);
+}
+
+// --- Input Handlers ---
+
+function onMouseDown(e) {
+    if(e.button === 2) { // Right Click = Pan
+        input.isRightDown = true;
+        input.start = {x: e.clientX, y: e.clientY};
+    } else if(e.button === 0) { // Left Click = Select
+        input.isLeftDown = true;
+        input.start = {x: e.clientX, y: e.clientY};
+        input.curr = {x: e.clientX, y: e.clientY};
+    }
+}
+
+function onMouseMove(e) {
+    if(input.isRightDown) {
+        // Pan Camera
+        camera.x += e.clientX - input.start.x;
+        camera.y += e.clientY - input.start.y;
+        input.start = {x: e.clientX, y: e.clientY};
+    }
+    if(input.isLeftDown) {
+        // Update Selection Box
+        input.curr = {x: e.clientX, y: e.clientY};
+    }
+}
+
+function onMouseUp(e) {
+    if(input.isRightDown && e.button === 2) {
+        input.isRightDown = false;
+    }
+    if(input.isLeftDown && e.button === 0) {
+        input.isLeftDown = false;
+        
+        // Check drag distance
+        let dist = Math.hypot(e.clientX - input.start.x, e.clientY - input.start.y);
+        
+        if(dist < 5) {
+            // Click
+            handleLeftClick(e.clientX, e.clientY);
+        } else {
+            // Box Select
+            handleBoxSelect();
+        }
+    }
+}
+
+function handleLeftClick(mx, my) {
+    let h = pixelToHex(mx, my);
+    if(!isValidHex(h)) return;
+
+    let clickedUnit = units.find(u => u.q === h.q && u.r === h.r && !u.dead);
+    let menu = document.getElementById('context-menu');
+    menu.style.display = 'none';
+
+    if(clickedUnit) {
+        if(clickedUnit.side === playerSide) {
+            // Single Select Ally
+            selectedUnits = [clickedUnit];
+            updateSelectionUI();
+        } else if(selectedUnits.length > 0) {
+            // Clicked Enemy with units selected -> Open Menu
+            targetContextUnit = clickedUnit;
+            menu.style.display = 'flex';
+            menu.style.left = mx + 'px';
+            menu.style.top = my + 'px';
+        }
+    } else {
+        // Clicked Ground
+        if(selectedUnits.length > 0) {
+            // Move Order (Persist until changed)
+            selectedUnits.forEach(u => {
+                u.order = { type: 'MOVE', targetHex: {q:h.q, r:h.r} };
+            });
+            updateSelectionUI();
+        } else {
+            // Clear selection if nothing selected
+            selectedUnits = [];
+            updateSelectionUI();
+        }
+    }
+}
+
+function handleBoxSelect() {
+    // Define Rect
+    let x1 = Math.min(input.start.x, input.curr.x);
+    let x2 = Math.max(input.start.x, input.curr.x);
+    let y1 = Math.min(input.start.y, input.curr.y);
+    let y2 = Math.max(input.start.y, input.curr.y);
+
+    // Filter Units in Rect (Screen Space)
+    let selection = units.filter(u => {
+        if(u.side !== playerSide || u.dead) return false;
+        let p = hexToPixel(u.q, u.r);
+        // Project to screen
+        let sx = p.x * camera.zoom + camera.x;
+        let sy = p.y * camera.zoom + camera.y;
+        return (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2);
+    });
+
+    selectedUnits = selection;
+    updateSelectionUI();
+}
+
+function onWheel(e) {
+    camera.zoom -= e.deltaY * 0.001;
+    if(camera.zoom < 0.5) camera.zoom = 0.5;
+    if(camera.zoom > 2.0) camera.zoom = 2.0;
+}
+
+// UI Actions
+function issueCommand(type) {
+    if(targetContextUnit && selectedUnits.length > 0) {
+        selectedUnits.forEach(u => {
+            u.order = { type: type, targetId: targetContextUnit.id };
+        });
+        updateSelectionUI();
+    }
+    closeCtx();
+}
+function closeCtx() { document.getElementById('context-menu').style.display = 'none'; }
+
+function updateHUD() {
+    let eS = units.filter(u=>u.side==='EAST'&&!u.dead).reduce((a,c)=>a+c.soldiers,0);
+    let wS = units.filter(u=>u.side==='WEST'&&!u.dead).reduce((a,c)=>a+c.soldiers,0);
+    document.getElementById('status-text').innerText = `東軍: ${eS} / 西軍: ${wS}`;
+}
+
+function updateSelectionUI() {
+    let list = document.getElementById('unit-list');
+    list.innerHTML = '';
+    selectedUnits.forEach(u => {
+        let d = document.createElement('div');
+        d.className = 'unit-card ' + (u.side==='EAST'?'card-east':'card-west');
+        
+        let ord = "待機";
+        if(u.order) {
+            if(u.order.type==='MOVE') ord = `移動 (${u.order.targetHex.q},${u.order.targetHex.r})`;
+            else if(u.order.type==='ATTACK') ord = `攻撃`;
+            else if(u.order.type==='PLOT') ord = `調略`;
+        }
+        
+        d.innerHTML = `<strong>${u.name}</strong> (${u.soldiers})<br>指示: ${ord}`;
+        list.appendChild(d);
+    });
+}
+
+// --- Rendering ---
+
+function loop() {
+    // Clear
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if(map.length > 0) {
+        // Draw Map
+        for(let r=0; r<MAP_H; r++) {
+            for(let q=0; q<MAP_W; q++) {
+                // Culling
+                let p = hexToPixel(q, r);
+                let sx = p.x * camera.zoom + camera.x;
+                let sy = p.y * camera.zoom + camera.y;
+                if(sx < -50 || sx > canvas.width+50 || sy < -50 || sy > canvas.height+50) continue;
+
+                let t = map[r][q];
+                drawHex(sx, sy, t);
+            }
+        }
+
+        // Draw Order Lines (for selected)
+        if(gameState === 'ORDER') {
+            ctx.lineWidth = 2;
+            selectedUnits.forEach(u => {
+                if(u.order) drawLine(u);
+            });
+        }
+
+        // Draw Units
+        units.forEach(u => {
+            if(!u.dead) drawUnit(u);
+        });
+
+        // Draw Selection Box
+        if(input.isLeftDown) {
+            let w = input.curr.x - input.start.x;
+            let h = input.curr.y - input.start.y;
+            ctx.fillStyle = C_SEL_BOX;
+            ctx.fillRect(input.start.x, input.start.y, w, h);
+            ctx.strokeStyle = C_SEL_BORDER;
+            ctx.strokeRect(input.start.x, input.start.y, w, h);
+        }
+    }
+    requestAnimationFrame(loop);
+}
+
+function drawHex(x, y, t) {
+    let size = HEX_SIZE * camera.zoom;
+    ctx.beginPath();
+    for(let i=0; i<6; i++) {
+        let rad = (60*i - 30) * Math.PI / 180;
+        ctx.lineTo(x + size * Math.cos(rad), y + size * Math.sin(rad));
+    }
+    ctx.closePath();
+    
+    // Color based on height/type
+    if(t.type === 'RIVER') ctx.fillStyle = '#4682B4';
+    else {
+        // Height gradient: Green(low) -> Brown(high)
+        let g = 150 - (t.h * 10);
+        let r = 50 + (t.h * 15);
+        ctx.fillStyle = `rgb(${r}, ${g}, 50)`;
+    }
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+function drawUnit(u) {
+    // Lerp visual pos for smoothness could be added here, but using direct pos for now
+    let p = hexToPixel(u.q, u.r);
+    let x = p.x * camera.zoom + camera.x;
+    let y = p.y * camera.zoom + camera.y;
+    
+    if(x < -50 || x > canvas.width+50 || y < -50 || y > canvas.height+50) return;
+
+    let size = HEX_SIZE * camera.zoom * 0.7;
+    if(u.soldiers > 10000) size *= 1.3;
+    else if(u.soldiers < 1000) size *= 0.7;
+
+    // Selection Highlight
+    if(selectedUnits.includes(u)) {
+        ctx.beginPath();
+        ctx.arc(x, y, size+4, 0, Math.PI*2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+    }
+
+    // Body
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI*2);
+    ctx.fillStyle = u.side==='EAST' ? C_EAST : C_WEST;
+    ctx.fill();
+
+    // Icon/Text
+    ctx.fillStyle = 'white';
+    ctx.font = `bold ${size}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(u.name.charAt(0), x, y);
+
+    // HP Bar
+    let barW = size * 2;
+    ctx.fillStyle = 'red';
+    ctx.fillRect(x - barW/2, y + size, barW, 4);
+    ctx.fillStyle = '#0f0';
+    ctx.fillRect(x - barW/2, y + size, barW * (u.soldiers/u.maxSoldiers), 4);
+}
+
+function drawLine(u) {
+    let start = hexToPixel(u.q, u.r);
+    let end = null;
+    
+    if(u.order.type === 'MOVE') end = hexToPixel(u.order.targetHex.q, u.order.targetHex.r);
+    else if(u.order.targetId != null) {
+        let t = units.find(x=>x.id === u.order.targetId);
+        if(t) end = hexToPixel(t.q, t.r);
+    }
+    
+    if(end) {
+        let sx = start.x * camera.zoom + camera.x;
+        let sy = start.y * camera.zoom + camera.y;
+        let ex = end.x * camera.zoom + camera.x;
+        let ey = end.y * camera.zoom + camera.y;
+        
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.strokeStyle = u.order.type==='ATTACK' ? 'red' : (u.order.type==='PLOT'?'#0f0':'white');
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+// --- Math Utils ---
+function hexToPixel(q, r) {
+    // Pointy Top
+    let x = HEX_SIZE * Math.sqrt(3) * (q + r/2);
+    let y = HEX_SIZE * 3/2 * r;
+    return {x, y};
+}
+
+function pixelToHex(mx, my) {
+    // Screen to World
+    let wx = (mx - camera.x) / camera.zoom;
+    let wy = (my - camera.y) / camera.zoom;
+    
+    let q = (Math.sqrt(3)/3 * wx - 1/3 * wy) / HEX_SIZE;
+    let r = (2/3 * wy) / HEX_SIZE;
+    return cubeRound({q, r, s:-q-r});
+}
+
+function cubeRound(c) {
+    let rx = Math.round(c.q);
+    let ry = Math.round(c.r);
+    let rz = Math.round(c.s);
+    let x_diff = Math.abs(rx - c.q);
+    let y_diff = Math.abs(ry - c.r);
+    let z_diff = Math.abs(rz - c.s);
+    if (x_diff > y_diff && x_diff > z_diff) rx = -ry - rz;
+    else if (y_diff > z_diff) ry = -rx - rz;
+    else rz = -rx - ry;
+    return { q: rx, r: ry };
+}
+
+function isValidHex(h) { return h.q>=0 && h.q<MAP_W && h.r>=0 && h.r<MAP_H; }
+function getDistRaw(q1, r1, q2, r2) { return (Math.abs(q1 - q2) + Math.abs(q1 + r1 - q2 - r2) + Math.abs(r1 - r2)) / 2; }
+function getDist(u1, u2) { return getDistRaw(u1.q, u1.r, u2.q, u2.r); }
+function getLine(q1, r1, q2, r2) {
+    let N = getDistRaw(q1, r1, q2, r2);
+    let res = [];
+    for(let i=0; i<=N; i++) {
+        let t = i/N;
+        let q = q1 + (q2-q1)*t;
+        let r = r1 + (r2-r1)*t;
+        res.push(cubeRound({q, r, s:-q-r}));
+    }
+    return res;
+}
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+</script>
+</body>
+</html>
