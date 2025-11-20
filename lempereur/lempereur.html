@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>L'EMPEREUR - ULTIMATE DEBUG VER</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border: 2px solid #666;
+            background: #222;
+            margin-top: 20px;
+        }
+        canvas {
+            display: block;
+            background-color: #2e8b57;
+        }
+        #ui-panel {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 120px;
+            background: rgba(0,0,0,0.9);
+            border-top: 1px solid #fff;
+            padding: 10px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+        }
+        #msg-box { font-size: 16px; line-height: 1.5; color: #ddd; width: 60%; }
+        #cmd-box { width: 35%; text-align: right; }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            background: #444;
+            color: white;
+            border: 1px solid #888;
+        }
+        button:hover { background: #666; }
+        
+        /* START OVERLAY */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+        }
+        #big-btn {
+            font-size: 24px; padding: 20px 50px;
+            background: #b22222; color: white; border: 2px solid red;
+            cursor: pointer;
+        }
+        
+        /* DEBUG LOG */
+        #debug-log {
+            position: fixed; bottom: 10px; right: 10px;
+            width: 300px; height: 150px;
+            background: rgba(0,0,0,0.8);
+            border: 1px solid lime;
+            color: lime;
+            font-family: monospace;
+            font-size: 10px;
+            overflow-y: scroll;
+            padding: 5px;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .debug-link {
+            color: yellow; text-decoration: underline; cursor: pointer;
+            position: absolute; top: 10px; right: 10px; z-index: 1001;
+        }
+    </style>
+</head>
+<body>
+
+<div class="debug-link" onclick="forceStart()">※ボタンが効かない場合はここをクリック</div>
+
+<div id="game-container">
+    <canvas id="hexCanvas" width="800" height="480"></canvas>
+    
+    <div id="ui-panel">
+        <div id="msg-box">システム準備完了。<br>スタートボタンを押してください。</div>
+        <div id="cmd-box"></div>
+    </div>
+
+    <div id="overlay">
+        <h1 style="color:#ffd700">L'EMPEREUR BATTLE</h1>
+        <button id="big-btn" onclick="startGame()">戦闘開始 (START)</button>
+        <p>HEX戦術シミュレーション</p>
+    </div>
+</div>
+
+<div id="debug-log"></div>
+
+<script>
+// --- グローバル変数 (Global Variables) ---
+var ctx;
+var map = [];
+var units = [];
+var selectedUnit = null;
+var turn = 'PLAYER';
+var isGameRunning = false;
+
+var HEX_SIZE = 30;
+var HEX_W = Math.sqrt(3) * HEX_SIZE;
+var HEX_H = 2 * HEX_SIZE;
+
+// --- デバッグログ機能 ---
+function log(msg) {
+    var d = document.getElementById('debug-log');
+    var line = document.createElement('div');
+    line.textContent = "> " + msg;
+    d.appendChild(line);
+    d.scrollTop = d.scrollHeight;
+    console.log(msg);
+}
+
+// --- エラーハンドリング ---
+window.onerror = function(msg, url, line) {
+    log("ERROR: " + msg + " line:" + line);
+    alert("エラーが発生しました: " + msg);
+};
+
+// --- 初期化 ---
+window.onload = function() {
+    log("Window Loaded.");
+    var c = document.getElementById('hexCanvas');
+    if(!c) { log("Canvasが見つかりません"); return; }
+    ctx = c.getContext('2d');
+    
+    // キャンバスのクリックイベント登録
+    c.addEventListener('mousedown', onCanvasClick);
+    
+    log("準備完了。待機中...");
+};
+
+// --- ゲーム開始処理 ---
+function startGame() {
+    log("startGame() 実行");
+    document.getElementById('overlay').style.display = 'none';
+    
+    if(isGameRunning) return;
+    isGameRunning = true;
+    
+    initMap();
+    initUnits();
+    draw();
+    updateMsg("フランス軍のターン。部隊(青)を選択してください。");
+    log("ゲームループ開始");
+}
+
+function forceStart() {
+    log("緊急起動リンクが押されました");
+    startGame();
+}
+
+// --- マップとユニット作成 ---
+function initMap() {
+    log("マップ生成中...");
+    // 0:平地 1:森 2:川 3:橋 4:都市
+    var raw = [
+        [0,0,0,0,1,1,0,0,0,2,0,0,4],
+        [0,0,0,1,1,0,0,0,0,2,0,0,0],
+        [0,0,1,1,0,0,0,0,0,2,2,2,0],
+        [4,0,0,0,0,0,0,0,0,0,0,2,0],
+        [0,0,0,0,0,0,0,0,0,0,0,2,0],
+        [0,0,0,0,0,2,2,2,2,2,2,2,0],
+        [0,0,0,0,1,2,0,0,0,0,0,0,0],
+        [0,0,0,1,1,2,0,0,1,1,0,0,0],
+        [0,0,0,0,0,2,0,0,0,0,0,0,0]
+    ];
+    
+    map = [];
+    for(var r=0; r<9; r++) {
+        var row = [];
+        for(var c=0; c<13; c++) {
+            row.push({ q:c, r:r, type: raw[r][c], highlight:false });
+        }
+        map.push(row);
+    }
+}
+
+function initUnits() {
+    log("ユニット配置中...");
+    // FR: Player, EN: Enemy
+    units = [
+        {id:1, side:'FR', type:'騎兵', hp:100, q:2, r:3, moved:false},
+        {id:2, side:'FR', type:'砲兵', hp:100, q:1, r:4, moved:false},
+        {id:3, side:'FR', type:'歩兵', hp:100, q:2, r:5, moved:false},
+        {id:4, side:'FR', type:'歩兵', hp:100, q:3, r:2, moved:false},
+        
+        {id:10, side:'EN', type:'歩兵', hp:100, q:8, r:2, moved:false},
+        {id:11, side:'EN', type:'砲兵', hp:100, q:9, r:3, moved:false},
+        {id:12, side:'EN', type:'騎兵', hp:100, q:7, r:4, moved:false},
+        {id:13, side:'EN', type:'歩兵', hp:100, q:6, r:5, moved:false}
+    ];
+}
+
+// --- 入力処理 ---
+function onCanvasClick(e) {
+    if(!isGameRunning) return;
+    if(turn !== 'PLAYER') return;
+
+    var rect = e.target.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+    
+    var hex = pixelToHex(mx, my);
+    if(hex) handleHex(hex.q, hex.r);
+}
+
+function handleHex(q, r) {
+    var u = getUnit(q, r);
+    var tile = map[r][q];
+
+    // 1. 自軍選択
+    if(u && u.side === 'FR') {
+        if(u.moved) { updateMsg("行動済みです"); return; }
+        selectedUnit = u;
+        resetHighlights();
+        showMoveRange(u);
+        makeButtons();
+        updateMsg(u.type + "を選択中。移動先(黄)か敵(赤)を選んでください。");
+        draw();
+        return;
+    }
+
+    // 2. 行動 (移動・攻撃)
+    if(selectedUnit) {
+        // 攻撃
+        if(u && u.side === 'EN') {
+            attack(selectedUnit, u);
+            return;
+        }
+        // 移動
+        if(tile.highlight && !u) {
+            moveUnit(selectedUnit, q, r);
+            return;
+        }
+    }
+}
+
+// --- ゲームロジック ---
+
+function moveUnit(u, q, r) {
+    log("移動: " + u.type + " to " + q + "," + r);
+    u.q = q;
+    u.r = r;
+    u.moved = true;
+    selectedUnit = null;
+    resetHighlights();
+    updateMsg("移動完了。");
+    checkTurn();
+    draw();
+    makeButtons(); // ボタンクリア
+}
+
+function attack(att, def) {
+    var dist = getDist(att, def);
+    
+    // 射程チェック
+    var rangeMin = 1, rangeMax = 1;
+    if(att.type === '砲兵') { rangeMin=2; rangeMax=3; }
+    
+    if(dist < rangeMin || dist > rangeMax) {
+        updateMsg("射程外です！(現在の距離:" + dist + ")");
+        return;
+    }
+
+    log("攻撃実行: " + att.type + " vs " + def.type);
+    
+    var dmg = 30;
+    // 相性
+    if(att.type === '騎兵') dmg = 40; // 突撃強し
+    if(map[def.r][def.q].type === 1) dmg *= 0.7; // 森防御
+    
+    def.hp -= Math.floor(dmg);
+    if(def.hp < 0) def.hp = 0;
+    
+    att.moved = true;
+    selectedUnit = null;
+    resetHighlights();
+    
+    var msg = att.type + "の攻撃！ " + Math.floor(dmg) + "のダメージ！";
+    if(def.hp === 0) msg += " 敵を撃破！";
+    
+    updateMsg(msg);
+    checkTurn();
+    draw();
+    makeButtons();
+}
+
+function doBridge() {
+    if(!selectedUnit || selectedUnit.type !== '歩兵') return;
+    
+    var n = getNeighbors(selectedUnit.q, selectedUnit.r);
+    var done = false;
+    for(var i=0; i<n.length; i++) {
+        var t = map[n[i].r][n[i].q];
+        if(t.type === 2) { t.type = 3; done = true; } // 川->橋
+    }
+    
+    if(done) {
+        log("架橋成功");
+        selectedUnit.moved = true;
+        selectedUnit = null;
+        resetHighlights();
+        updateMsg("架橋しました！");
+        checkTurn();
+        draw();
+        makeButtons();
+    } else {
+        updateMsg("隣接する川がありません。");
+    }
+}
+
+function checkTurn() {
+    var fr = units.filter(function(u){ return u.side==='FR' && u.hp>0; });
+    var allMoved = true;
+    for(var i=0; i<fr.length; i++) if(!fr[i].moved) allMoved = false;
+    
+    if(allMoved) {
+        turn = 'ENEMY';
+        updateMsg("敵軍フェイズ...");
+        setTimeout(enemyTurn, 1000);
+    }
+}
+
+function enemyTurn() {
+    log("敵ターン開始");
+    var en = units.filter(function(u){ return u.side==='EN' && u.hp>0; });
+    var fr = units.filter(function(u){ return u.side==='FR' && u.hp>0; });
+    
+    if(fr.length === 0) { updateMsg("敗北..."); return; }
+
+    for(var i=0; i<en.length; i++) {
+        var u = en[i];
+        // 簡易AI: 一番近い敵に向かう
+        var target = fr[0]; 
+        // 移動ロジック省略(その場で攻撃か待機)
+        var d = getDist(u, target);
+        if(d <= 3) {
+            target.hp -= 10;
+            log("敵攻撃: " + target.type + " hp-10");
+        }
+    }
+    
+    // リセット
+    units.forEach(function(u){ if(u.side==='FR') u.moved=false; });
+    turn = 'PLAYER';
+    updateMsg("フランス軍のターン");
+    draw();
+}
+
+// --- 補助関数 ---
+function getUnit(q, r) {
+    for(var i=0; i<units.length; i++) {
+        if(units[i].q === q && units[i].r === r && units[i].hp > 0) return units[i];
+    }
+    return null;
+}
+
+function getDist(u1, u2) {
+    // Cube座標変換
+    var x1 = u1.q - (u1.r - (u1.r&1)) / 2;
+    var z1 = u1.r;
+    var y1 = -x1-z1;
+    
+    var x2 = u2.q - (u2.r - (u2.r&1)) / 2;
+    var z2 = u2.r;
+    var y2 = -x2-z2;
+    
+    return Math.max(Math.abs(x1-x2), Math.abs(y1-y2), Math.abs(z1-z2));
+}
+
+function showMoveRange(u) {
+    var range = (u.type === '騎兵') ? 4 : (u.type === '砲兵' ? 2 : 3);
+    // 簡易ハイライト(距離計算なしで隣接のみ広げるBFS簡易版)
+    // 今回は「距離=範囲」の全ハイライト
+    for(var r=0; r<9; r++) {
+        for(var c=0; c<13; c++) {
+             var dist = getDist(u, {q:c, r:r});
+             if(dist <= range && dist > 0) {
+                 var t = map[r][c];
+                 if(t.type !== 2 && !getUnit(c,r)) t.highlight = true; // 川以外ユニットなし
+             }
+        }
+    }
+}
+
+function resetHighlights() {
+    for(var r=0; r<9; r++) for(var c=0; c<13; c++) map[r][c].highlight = false;
+}
+
+function getNeighbors(q, r) {
+    // Odd-r offsets
+    var dirs = (r%2===0) ? 
+        [[1,0], [0,-1], [-1,-1], [-1,0], [-1,1], [0,1]] : 
+        [[1,0], [1,-1], [0,-1], [-1,0], [0,1], [1,1]];
+    var ret = [];
+    for(var i=0; i<dirs.length; i++) {
+        var nq = q + dirs[i][0];
+        var nr = r + dirs[i][1];
+        if(nq>=0 && nq<13 && nr>=0 && nr<9) ret.push({q:nq, r:nr});
+    }
+    return ret;
+}
+
+function hexToPixel(q, r) {
+    var x = (q * HEX_W) + (r % 2) * (HEX_W / 2) + 40;
+    var y = (r * (HEX_H * 0.75)) + 40;
+    return {x:x, y:y};
+}
+
+function pixelToHex(x, y) {
+    var best = null, min = 9999;
+    for(var r=0; r<9; r++) {
+        for(var c=0; c<13; c++) {
+            var p = hexToPixel(c, r);
+            var d = Math.sqrt((p.x-x)*(p.x-x) + (p.y-y)*(p.y-y));
+            if(d < HEX_SIZE && d < min) { min = d; best = {q:c, r:r}; }
+        }
+    }
+    return best;
+}
+
+function makeButtons() {
+    var box = document.getElementById('cmd-box');
+    box.innerHTML = "";
+    if(!selectedUnit) return;
+    
+    var btn = document.createElement('button');
+    btn.innerText = "待機";
+    btn.onclick = function() { 
+        selectedUnit.moved = true; selectedUnit = null; resetHighlights(); updateMsg("待機。"); checkTurn(); draw(); makeButtons();
+    };
+    box.appendChild(btn);
+
+    if(selectedUnit.type === '歩兵') {
+        var btn2 = document.createElement('button');
+        btn2.innerText = "架橋";
+        btn2.style.color = "orange";
+        btn2.onclick = doBridge;
+        box.appendChild(btn2);
+    }
+}
+
+function updateMsg(t) {
+    document.getElementById('msg-box').innerHTML = t;
+}
+
+// --- 描画 ---
+function draw() {
+    if(!ctx) return;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, 800, 600);
+    
+    // Map
+    for(var r=0; r<9; r++) {
+        for(var c=0; c<13; c++) {
+            var t = map[r][c];
+            var p = hexToPixel(c, r);
+            var color = "#2e8b57"; // 平地
+            if(t.type === 1) color = "#006400"; // 森
+            if(t.type === 2) color = "#4169e1"; // 川
+            if(t.type === 3) color = "#8b4513"; // 橋
+            if(t.type === 4) color = "#808080"; // 都市
+            
+            drawHex(p.x, p.y, color, t.highlight);
+            
+            // 文字
+            if(t.type===1) drawText("🌲", p.x, p.y);
+            if(t.type===4) drawText("🏰", p.x, p.y);
+        }
+    }
+    
+    // Units
+    for(var i=0; i<units.length; i++) {
+        var u = units[i];
+        if(u.hp <= 0) continue;
+        var p = hexToPixel(u.q, u.r);
+        
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 15, 0, Math.PI*2);
+        ctx.fillStyle = (u.side === 'FR') ? (u.moved ? "#555" : "#1e90ff") : "#dc143c";
+        ctx.fill();
+        
+        if(selectedUnit === u) {
+            ctx.lineWidth = 3; ctx.strokeStyle = "yellow"; ctx.stroke();
+        } else {
+            ctx.lineWidth = 1; ctx.strokeStyle = "white"; ctx.stroke();
+        }
+        
+        drawText(u.type.charAt(0), p.x, p.y+5, "white", "12px");
+        
+        // HP Bar
+        ctx.fillStyle = "red"; ctx.fillRect(p.x-10, p.y-20, 20, 4);
+        ctx.fillStyle = "lime"; ctx.fillRect(p.x-10, p.y-20, 20*(u.hp/100), 4);
+    }
+}
+
+function drawHex(x, y, color, highlight) {
+    ctx.beginPath();
+    for(var i=0; i<6; i++) {
+        var deg = 60 * i - 30;
+        var rad = Math.PI / 180 * deg;
+        var px = x + (HEX_SIZE-1) * Math.cos(rad);
+        var py = y + (HEX_SIZE-1) * Math.sin(rad);
+        if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = highlight ? 3 : 1;
+    ctx.strokeStyle = highlight ? "yellow" : "#333";
+    ctx.stroke();
+}
+
+function drawText(txt, x, y, c, f) {
+    ctx.fillStyle = c || "white";
+    ctx.font = f || "16px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(txt, x, y);
+}
+
+</script>
+</body>
+</html>
